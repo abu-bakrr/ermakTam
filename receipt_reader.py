@@ -5,14 +5,14 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-def parse_receipt_gemini(image_bytes: bytes) -> dict:
-    """Отправляет чек в Gemini 2.0 Flash и возвращает структурированный словарь."""
+def parse_receipt_gemini(image_bytes_list: list) -> dict:
+    """Отправляет все части чека в Gemini одним запросом и возвращает структурированный словарь."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY не установлен в .env")
         
     client = genai.Client(api_key=api_key)
-    image = Image.open(io.BytesIO(image_bytes))
+    images = [Image.open(io.BytesIO(b)) for b in image_bytes_list]
     
     prompt = """
     Ты опытный бухгалтер. Твоя задача — распознать данные с фотографии чека или накладной.
@@ -55,7 +55,7 @@ def parse_receipt_gemini(image_bytes: bytes) -> dict:
             print(f"Пробуем модель: {model_name}...")
             response = client.models.generate_content(
                 model=model_name,
-                contents=[image, prompt],
+                contents=images + [prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 )
@@ -76,30 +76,3 @@ def parse_receipt_gemini(image_bytes: bytes) -> dict:
 
     raise Exception(f"Все модели выдали ошибку. Последняя ошибка: {last_error}")
 
-def merge_receipts(results: list) -> dict:
-    all_items = []
-    receipt_date = ""
-    supplier = ""
-    seen = set()
-    
-    for r in results:
-        if not receipt_date and r.get("receipt_date"):
-            receipt_date = r["receipt_date"]
-        if not supplier and r.get("supplier"):
-            supplier = r["supplier"]
-        
-        for item in r.get("items", []):
-            key = (
-                str(item.get("nomenclature", "")).strip().lower(),
-                str(item.get("price", "")).strip(),
-                str(item.get("quantity", "")).strip()
-            )
-            if key not in seen:
-                seen.add(key)
-                all_items.append(item)
-    
-    return {
-        "receipt_date": receipt_date,
-        "supplier": supplier,
-        "items": all_items
-    }

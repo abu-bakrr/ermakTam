@@ -272,22 +272,20 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
                 return ""
 
         cloud_task = loop.run_in_executor(None, upload_to_cloudinary, photos[0])
-        ai_tasks = [loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, p) for p in photos]
+        ai_task = loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, photos)
 
-        results = await asyncio.gather(cloud_task, *ai_tasks, return_exceptions=True)
+        results = await asyncio.gather(cloud_task, ai_task, return_exceptions=True)
 
         cloudinary_url = results[0] if isinstance(results[0], str) else ""
-        ai_results = []
-        for r in results[1:]:
-            if isinstance(r, dict):
-                ai_results.append(r)
-            else:
-                logging.warning(f"AI parse error for one photo: {r}")
+        
+        parsed = results[1]
+        if isinstance(parsed, Exception):
+            logging.error(f"AI parsing failed: {parsed}")
+            raise parsed
 
-        if not ai_results:
-            raise Exception("All AI parsing failed")
+        if not parsed or not isinstance(parsed, dict):
+            raise Exception("AI parsing returned empty or invalid data")
 
-        parsed = receipt_reader.merge_receipts(ai_results)
         items = parsed.get("items", [])
 
         await state.update_data(
