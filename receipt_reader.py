@@ -5,14 +5,17 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-def parse_receipt_gemini(image_bytes_list: list) -> dict:
-    """Отправляет все части чека в Gemini одним запросом и возвращает структурированный словарь."""
+def parse_receipt_gemini(image_bytes: bytes, previously_found_items: list = None) -> dict:
+    """Отправляет чек в Gemini и возвращает структурированный словарь."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY не установлен в .env")
         
     client = genai.Client(api_key=api_key)
-    images = [Image.open(io.BytesIO(b)) for b in image_bytes_list]
+    image = Image.open(io.BytesIO(image_bytes))
+    
+    if previously_found_items is None:
+        previously_found_items = []
     
     prompt = """
     Ты опытный бухгалтер. Твоя задача — распознать данные с фотографии чека или накладной.
@@ -40,6 +43,16 @@ def parse_receipt_gemini(image_bytes_list: list) -> dict:
     }
     """
     
+    if previously_found_items:
+        items_str = json.dumps(previously_found_items, ensure_ascii=False, indent=2)
+        prompt += f"""
+    
+    ВНИМАНИЕ! Следующие товары УЖЕ БЫЛИ НАЙДЕНЫ на предыдущих частях этого же чека. 
+    Если ты видишь их на этом фото, НЕ ДОБАВЛЯЙ их в свой ответ (пропусти их). 
+    Список уже найденных товаров:
+    {items_str}
+    """
+    
     MODELS = [
         'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',
@@ -55,7 +68,7 @@ def parse_receipt_gemini(image_bytes_list: list) -> dict:
             print(f"Пробуем модель: {model_name}...")
             response = client.models.generate_content(
                 model=model_name,
-                contents=images + [prompt],
+                contents=[image, prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 )
@@ -76,3 +89,75 @@ def parse_receipt_gemini(image_bytes_list: list) -> dict:
 
     raise Exception(f"Все модели выдали ошибку. Последняя ошибка: {last_error}")
 
+def merge_receipts(results: list) -> dict:
+    all_items = []
+    receipt_date = ""
+    supplier = ""
+    seen = set()
+    
+    for r in results:
+        if not receipt_date and r.get("receipt_date"):
+            receipt_date = r["receipt_date"]
+        if not supplier and r.get("supplier"):
+            supplier = r["supplier"]
+        
+        for item in r.get("items", []):
+            key = (
+                str(item.get("nomenclature", "")).strip().lower(),
+                str(item.get("price", "")).strip(),
+                str(item.get("quantity", "")).strip()
+            )
+            if key not in seen:
+                seen.add(key)
+                all_items.append(item)
+    
+    return {
+        "receipt_date": receipt_date,
+        "supplier": supplier,
+        "items": all_items
+    }
+
+def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return merged_receipt_data
+        
+    client = genai.Client(api_key=api_key)
+    
+    prompt = f"""
+    Ниже представлен JSON-объект, полученный путем склеивания распознанных товаров с нескольких фотографий одного длинного чека.
+    Возможно, некоторые товары задублировались из-за пересечения фотографий. 
+    Также возможно, что один и тот же товар был пробит на двух языках (например, русский и узбекский), и поэтому попал в список дважды.
+
+    Твоя задача — очистить список товаров от дубликатов.
+    Если два товара имеют одинаковую цену и количество, и их названия означают одно и то же (или очень похожи), оставь только ОДИН вариант.
+
+    Данные чека:
+    {json.dumps(merged_receipt_data, ensure_ascii=False, indent=2)}
+
+    Верни очищенный СТРОГО JSON в таком же формате:
+    {{
+      "receipt_date": "...",
+      "supplier": "...",
+      "items": [ ... ]
+    }}
+    """
+    
+    try:
+        print("Пробуем финальную очистку дубликатов...")
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            )
+        )
+        data = json.loads(response.text)
+        return {
+            "receipt_date": str(data.get("receipt_date", "")),
+            "supplier": str(data.get("supplier", "")),
+            "items": data.get("items", [])
+        }
+    except Exception as e:
+        print(f"[WARNING] Ошибка финальной очистки: {e}")
+        return merged_receipt_data
