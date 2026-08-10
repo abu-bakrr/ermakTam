@@ -209,42 +209,87 @@ async def receipt_cmd(message: types.Message, state: FSMContext):
     if user_id not in users_db or "performer" not in users_db[user_id]:
         await lang_cmd(message, state)
         return
-    await message.answer(
-        get_msg(user_id, "send_receipt_prompt"),
-        reply_markup=get_cancel_kb(user_id)
+    await state.update_data(receipt_photos=[])
+    done_btn = get_msg(user_id, "done_btn")
+    cancel_btn = get_msg(user_id, "cancel_btn")
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=done_btn)], [KeyboardButton(text=cancel_btn)]],
+        resize_keyboard=True
     )
+    await message.answer(get_msg(user_id, "send_receipt_prompt"), reply_markup=kb)
     await state.set_state(Form.waiting_receipt)
 
 @dp.message(Form.waiting_receipt, F.photo)
 async def process_receipt_photo(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    wait_msg = await message.answer(get_msg(user_id, "reading_receipt"))
+    photo = message.photo[-1]
+    file_info = await bot.get_file(photo.file_id)
+    file_bytes = io.BytesIO()
+    await bot.download_file(file_info.file_path, file_bytes)
+    img_data = file_bytes.getvalue()
+
+    data = await state.get_data()
+    photos = data.get("receipt_photos", [])
+    photos.append(img_data)
+    await state.update_data(receipt_photos=photos)
+
+    n = len(photos)
+    done_btn = get_msg(user_id, "done_btn")
+    cancel_btn = get_msg(user_id, "cancel_btn")
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=done_btn)], [KeyboardButton(text=cancel_btn)]],
+        resize_keyboard=True
+    )
+    await message.answer(get_msg(user_id, "photo_accepted").format(n=n), reply_markup=kb)
+
+@dp.message(Form.waiting_receipt, F.text.in_([
+    config.MESSAGES["ru"]["done_btn"],
+    config.MESSAGES["uz"]["done_btn"]
+]))
+async def process_receipt_done(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    photos = data.get("receipt_photos", [])
+
+    if not photos:
+        await message.answer(get_msg(user_id, "only_photo"))
+        return
+
+    n = len(photos)
+    wait_msg = await message.answer(
+        get_msg(user_id, "reading_receipt_multi").format(n=n)
+    )
 
     try:
-        photo = message.photo[-1]
-        file_info = await bot.get_file(photo.file_id)
-        
-        file_bytes = io.BytesIO()
-        await bot.download_file(file_info.file_path, file_bytes)
-        img_data = file_bytes.getvalue()
-        
         loop = asyncio.get_event_loop()
-        
-        def upload_to_cloudinary():
+
+        def upload_to_cloudinary(img_data):
             try:
                 res = cloudinary.uploader.upload(img_data, resource_type="image")
                 return res.get("secure_url", "")
             except Exception as e:
                 logging.warning(f"Cloudinary upload failed: {e}")
                 return ""
-            
-        task_upload = loop.run_in_executor(None, upload_to_cloudinary)
-        task_ai = loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, img_data)
-        
-        cloudinary_url, parsed = await asyncio.gather(task_upload, task_ai)
 
+        cloud_task = loop.run_in_executor(None, upload_to_cloudinary, photos[0])
+        ai_tasks = [loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, p) for p in photos]
+
+        results = await asyncio.gather(cloud_task, *ai_tasks, return_exceptions=True)
+
+        cloudinary_url = results[0] if isinstance(results[0], str) else ""
+        ai_results = []
+        for r in results[1:]:
+            if isinstance(r, dict):
+                ai_results.append(r)
+            else:
+                logging.warning(f"AI parse error for one photo: {r}")
+
+        if not ai_results:
+            raise Exception("All AI parsing failed")
+
+        parsed = receipt_reader.merge_receipts(ai_results)
         items = parsed.get("items", [])
-        
+
         await state.update_data(
             ai_items=items,
             ai_supplier=parsed.get("supplier", ""),
@@ -260,10 +305,10 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
             lines.append(get_msg(user_id, "ai_date").format(val=parsed['receipt_date']))
         else:
             lines.append(get_msg(user_id, "ai_date_not_found"))
-        
+
         lines.append(get_msg(user_id, "ai_supplier").format(val=parsed.get('supplier') or '—'))
-        lines.append("")  
-        
+        lines.append("")
+
         if items:
             lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
             for i, item in enumerate(items, 1):
@@ -280,7 +325,7 @@ async def process_receipt_photo(message: types.Message, state: FSMContext):
                 lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total))
         else:
             lines.append(get_msg(user_id, "ai_no_items"))
-        
+
         await message.answer("\n".join(lines), parse_mode="HTML")
 
         if items:
@@ -334,7 +379,7 @@ async def process_confirm_receipt(message: types.Message, state: FSMContext):
 @dp.message(Form.waiting_receipt)
 async def receipt_no_photo(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    await message.answer(get_msg(user_id, "only_photo"), reply_markup=get_cancel_kb(user_id))
+    await message.answer(get_msg(user_id, "only_photo"))
 
 @dp.message(Form.lang)
 async def process_lang(message: types.Message, state: FSMContext):

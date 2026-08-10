@@ -83,3 +83,31 @@ def parse_receipt_gemini(image_bytes: bytes) -> dict:
             continue  
 
     raise Exception(f"Все модели выдали ошибку. Последняя ошибка: {last_error}")
+
+def merge_receipts(results: list) -> dict:
+    all_items = []
+    receipt_date = ""
+    supplier = ""
+    seen = set()
+    
+    for r in results:
+        if not receipt_date and r.get("receipt_date"):
+            receipt_date = r["receipt_date"]
+        if not supplier and r.get("supplier"):
+            supplier = r["supplier"]
+        
+        for item in r.get("items", []):
+            key = (
+                str(item.get("nomenclature", "")).strip().lower(),
+                str(item.get("price", "")).strip(),
+                str(item.get("quantity", "")).strip()
+            )
+            if key not in seen:
+                seen.add(key)
+                all_items.append(item)
+    
+    return {
+        "receipt_date": receipt_date,
+        "supplier": supplier,
+        "items": all_items
+    }
