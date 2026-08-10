@@ -319,6 +319,7 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
 
         if items:
             lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
+            grand_total = 0
             for i, item in enumerate(items, 1):
                 nom = item.get("nomenclature", "—")
                 price = item.get("price", "—")
@@ -326,11 +327,17 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
                 try:
                     p = float(str(price).replace(",", ".").replace(" ", ""))
                     q = float(str(qty).replace(",", ".").replace(" ", ""))
-                    total = f"{p * q:,.0f}".replace(",", " ")
+                    item_total = p * q
+                    grand_total += item_total
+                    total_str = f"{item_total:,.0f}".replace(",", " ")
                 except:
-                    total = "?"
+                    total_str = "?"
                 lines.append(f"  {i}. <b>{nom}</b>")
-                lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total))
+                lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
+            
+            if grand_total > 0:
+                grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
+                lines.append(f"\n💰 <b>Общая сумма чека:</b> {grand_total_str}")
         else:
             lines.append(get_msg(user_id, "ai_no_items"))
 
