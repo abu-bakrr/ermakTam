@@ -1,9 +1,42 @@
 import os
 import json
 import io
+import platform
+
+# Configure zbar library path for pyzbar on macOS
+if platform.system() == "Darwin":
+    os.environ["DYLD_LIBRARY_PATH"] = "/opt/homebrew/lib:" + os.environ.get("DYLD_LIBRARY_PATH", "")
+
 from PIL import Image
 from google import genai
 from google.genai import types
+from pyzbar.pyzbar import decode
+
+def scan_qr_codes(image_bytes: bytes) -> list[str]:
+    """Сканирует QR-коды на изображении и возвращает список найденных ссылок."""
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        decoded_objects = decode(image)
+        links = []
+        for obj in decoded_objects:
+            data = obj.data.decode('utf-8', errors='ignore')
+            if data.startswith('http') or data.startswith('https'):
+                links.append(data)
+        return links
+    except Exception as e:
+        print(f"[WARNING] QR scan error: {e}")
+        return []
+
+
+def find_soliq_link(image_bytes_list: list[bytes]) -> str | None:
+    """Ищет ссылку, начинающуюся с soliq, в списке изображений."""
+    for img_bytes in image_bytes_list:
+        links = scan_qr_codes(img_bytes)
+        for link in links:
+            if link.startswith('soliq') or 'soliq' in link.lower():
+                return link
+    return None
+
 
 def parse_receipt_gemini(image_bytes: bytes, previously_found_items: list = None) -> dict:
     """Отправляет чек в Gemini и возвращает структурированный словарь."""

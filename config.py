@@ -102,7 +102,9 @@ MESSAGES = {
         "final_item_line": "{i}. {nom} — {qty} шт x {price} = {total}",
         "final_receipt_tmc_note": "\n<b>ТМЦ:</b> {tmc}\n<b>Примечание:</b> {note}",
         "final_total": "\n<b>ИТОГО:</b> {val}",
-        "final_ask": "\nВсё ли верно?"
+        "final_ask": "\nВсё ли верно?",
+        "qr_not_found": "❌ На фото не найден QR-код с ссылкой на soliq.uz. Пожалуйста, отправьте отдельное фото QR-кода с чека.",
+        "qr_found": "✅ Найдена ссылка на чек: {link}"
     },
     "uz": {
         "choose_lang": "Tilni tanlang:",
@@ -173,6 +175,8 @@ MESSAGES = {
         "final_item_line": "{i}. {nom} — {qty} dona x {price} = {total}",
         "final_receipt_tmc_note": "\n<b>TMC:</b> {tmc}\n<b>Izoh:</b> {note}",
         "final_total": "\n<b>JAMI:</b> {val}",
-        "final_ask": "\nBarchasi to'g'rimi?"
+        "final_ask": "\nBarchasi to'g'rimi?",
+        "qr_not_found": "❌ Rasmlarda soliq.uz havolasi bilan QR-kod topilmadi. Iltimos, chekdan QR-kodning alohida rasmini yuboring.",
+        "qr_found": "✅ Chek havolasi topildi: {link}"
     }
 }

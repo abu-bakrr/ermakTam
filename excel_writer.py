@@ -218,13 +218,21 @@ def add_record(data: dict):
             qty = 0
             
         if photo_path and photo_path.startswith("http"):
-            photo_link = f'=HYPERLINK("{photo_path}", "Смотреть")'
+            photo_links = [u for u in photo_path.split(",") if u]
+            photo_link = f'=HYPERLINK("{photo_links[0]}", "Смотреть")'
+            extra_photo_links = [
+                f'=HYPERLINK("{u}", "Смотреть")'
+                for u in photo_links[1:]
+            ]
         elif photo_path:
+            photo_links = [photo_path]
             base_dir = os.path.dirname(os.path.abspath(__file__))
             abs_photo = os.path.join(base_dir, "photos", photo_path)
             photo_link = f'=HYPERLINK("file://{abs_photo}", "Смотреть")'
+            extra_photo_links = []
         else:
             photo_link = ""
+            extra_photo_links = []
 
         next_num = get_next_number(ws)
 
@@ -247,9 +255,12 @@ def add_record(data: dict):
         ]
         
         ws.append(row)
-        
+
         current_row = ws.max_row
-        
+
+        for offset, link in enumerate(extra_photo_links, start=1):
+            ws.cell(row=current_row, column=15 + offset).value = link
+
         ws.cell(row=current_row, column=9).value = f"=G{current_row}*H{current_row}"
         ws.cell(row=current_row, column=7).number_format = '#,##0'
         ws.cell(row=current_row, column=8).number_format = '#,##0.##'
