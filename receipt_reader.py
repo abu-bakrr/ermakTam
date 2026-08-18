@@ -34,18 +34,15 @@ def scan_qr_codes(image_bytes: bytes) -> list[str]:
         binary = gray.point(lambda p: 255 if p > 128 else 0, mode='1')
         variations.append(binary)
         
+        all_links = set()
         for img_var in variations:
             decoded_objects = decode(img_var)
-            links = []
             for obj in decoded_objects:
                 data = obj.data.decode('utf-8', errors='ignore')
                 if data.startswith('http') or data.startswith('https'):
-                    links.append(data)
-            
-            if links:
-                return links
-                
-        return []
+                    all_links.add(data)
+                    
+        return list(all_links)
     except Exception as e:
         print(f"[WARNING] QR scan error: {e}")
         return []

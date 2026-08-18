@@ -916,7 +916,7 @@ async def show_edit_menu(message_or_callback, state: FSMContext, user_id: int):
     text = get_msg(user_id, "edit_menu_title")
     if isinstance(message_or_callback, types.Message):
         # We also want to remove the regular keyboard
-        await message_or_callback.answer(text, reply_markup=ReplyKeyboardRemove())
+        await message_or_callback.answer(get_msg(user_id, "edit_saved"), reply_markup=ReplyKeyboardRemove())
         await message_or_callback.answer(text, reply_markup=kb)
     else:
         await message_or_callback.message.edit_text(text, reply_markup=kb)
