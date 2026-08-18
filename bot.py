@@ -63,6 +63,9 @@ class Form(StatesGroup):
     confirm_receipt = State()
     waiting_qr = State()
 
+    edit_receipt_menu = State()
+    wait_edit_value = State()
+
     shop = State()
     payment = State()
     supplier = State()
@@ -405,12 +408,7 @@ async def process_confirm_receipt(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.shop)
     elif message.text == get_msg(user_id, "no"):
-        await state.update_data(is_ai_mode=False, ai_items=[])
-        await message.answer(
-            get_msg(user_id, "ai_no_manual"),
-            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
-        )
-        await state.set_state(Form.shop)
+        await show_edit_menu(message, state, user_id)
     else:
         await message.answer(get_msg(user_id, "press_yes_no"))
 
@@ -875,6 +873,162 @@ async def process_confirm(message: types.Message, state: FSMContext):
         await state.clear()
     else:
         await message.answer(get_msg(user_id, "press_yes_no"))
+
+
+async def show_edit_menu(message_or_callback, state: FSMContext, user_id: int):
+    data = await state.get_data()
+    items = data.get("ai_items", [])
+    
+    if not items:
+        # If AI found absolutely nothing, just go to manual mode
+        await state.update_data(is_ai_mode=False, ai_items=[])
+        if isinstance(message_or_callback, types.Message):
+            await message_or_callback.answer(
+                get_msg(user_id, "ai_no_manual"),
+                reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+            )
+        else:
+            await message_or_callback.message.answer(
+                get_msg(user_id, "ai_no_manual"),
+                reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+            )
+        await state.set_state(Form.shop)
+        return
+
+    buttons = []
+    # Button to edit supplier
+    buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_supplier_btn"), callback_data="edit_receipt_supplier")])
+    
+    # Buttons for each item
+    for i, item in enumerate(items):
+        nom = item.get("nomenclature", f"Товар {i+1}")
+        btn_text = get_msg(user_id, "edit_item_btn").format(nom=nom)
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"edit_receipt_item_{i}")])
+        
+    # Done button
+    buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_done_btn"), callback_data="edit_receipt_done")])
+    
+    # Full manual button
+    buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_full_manual_btn"), callback_data="edit_receipt_manual")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    text = get_msg(user_id, "edit_menu_title")
+    if isinstance(message_or_callback, types.Message):
+        # We also want to remove the regular keyboard
+        await message_or_callback.answer(text, reply_markup=ReplyKeyboardRemove())
+        await message_or_callback.answer(text, reply_markup=kb)
+    else:
+        await message_or_callback.message.edit_text(text, reply_markup=kb)
+        
+    await state.set_state(Form.edit_receipt_menu)
+
+@dp.callback_query(Form.edit_receipt_menu, F.data.startswith("edit_receipt_"))
+async def process_edit_receipt_callback(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    action = callback.data.replace("edit_receipt_", "")
+    
+    if action == "done":
+        await state.update_data(is_ai_mode=True)
+        await callback.message.delete()
+        await callback.message.answer(
+            get_msg(user_id, "ai_yes_success"),
+            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+        )
+        await state.set_state(Form.shop)
+        
+    elif action == "manual":
+        await state.update_data(is_ai_mode=False, ai_items=[])
+        await callback.message.delete()
+        await callback.message.answer(
+            get_msg(user_id, "ai_no_manual"),
+            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+        )
+        await state.set_state(Form.shop)
+        
+    elif action == "supplier":
+        await state.update_data(edit_target="supplier")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_msg(user_id, "edit_back_btn"), callback_data="edit_back")]])
+        await callback.message.edit_text(get_msg(user_id, "enter_new_supplier"), reply_markup=kb)
+        await state.set_state(Form.wait_edit_value)
+        
+    elif action.startswith("item_"):
+        idx = int(action.split("_")[1])
+        data = await state.get_data()
+        items = data.get("ai_items", [])
+        if idx >= len(items):
+            await callback.answer("Error")
+            return
+            
+        item = items[idx]
+        nom = item.get("nomenclature", "")
+        
+        buttons = [
+            [InlineKeyboardButton(text=get_msg(user_id, "edit_name_btn"), callback_data=f"edit_field_{idx}_name")],
+            [InlineKeyboardButton(text=get_msg(user_id, "edit_price_btn"), callback_data=f"edit_field_{idx}_price")],
+            [InlineKeyboardButton(text=get_msg(user_id, "edit_qty_btn"), callback_data=f"edit_field_{idx}_qty")],
+            [InlineKeyboardButton(text=get_msg(user_id, "edit_back_btn"), callback_data="edit_back")]
+        ]
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(get_msg(user_id, "edit_item_title").format(nom=nom), reply_markup=kb)
+
+@dp.callback_query(Form.edit_receipt_menu, F.data == "edit_back")
+async def process_edit_back_menu(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    await show_edit_menu(callback, state, user_id)
+
+@dp.callback_query(Form.edit_receipt_menu, F.data.startswith("edit_field_"))
+async def process_edit_field_callback(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    parts = callback.data.split("_")
+    idx = int(parts[2])
+    field = parts[3]
+    
+    await state.update_data(edit_target=f"item_{idx}_{field}")
+    
+    prompts = {
+        "name": get_msg(user_id, "enter_new_name"),
+        "price": get_msg(user_id, "enter_new_price"),
+        "qty": get_msg(user_id, "enter_new_qty")
+    }
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_msg(user_id, "edit_back_btn"), callback_data="edit_back")]])
+    await callback.message.edit_text(prompts[field], reply_markup=kb)
+    await state.set_state(Form.wait_edit_value)
+
+@dp.callback_query(Form.wait_edit_value, F.data == "edit_back")
+async def process_edit_back(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    await show_edit_menu(callback, state, user_id)
+
+@dp.message(Form.wait_edit_value)
+async def process_edit_value_msg(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    data = await state.get_data()
+    target = data.get("edit_target")
+    
+    if target == "supplier":
+        await state.update_data(ai_supplier=message.text)
+    elif target and target.startswith("item_"):
+        parts = target.split("_")
+        idx = int(parts[1])
+        field = parts[2]
+        
+        items = data.get("ai_items", [])
+        if idx < len(items):
+            if field == "name":
+                items[idx]["nomenclature"] = message.text
+            elif field == "price":
+                items[idx]["price"] = message.text
+            elif field == "qty":
+                items[idx]["quantity"] = message.text
+            await state.update_data(ai_items=items)
+            
+    # Go back to menu
+    await message.delete()  # optionally delete user's message
+    # To properly go back, we resend the menu
+    await show_edit_menu(message, state, user_id)
+
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)

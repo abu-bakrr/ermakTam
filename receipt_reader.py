@@ -7,22 +7,45 @@ import platform
 if platform.system() == "Darwin":
     os.environ["DYLD_LIBRARY_PATH"] = "/opt/homebrew/lib:" + os.environ.get("DYLD_LIBRARY_PATH", "")
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps
 from google import genai
 from google.genai import types
 from pyzbar.pyzbar import decode
 
 def scan_qr_codes(image_bytes: bytes) -> list[str]:
-    """Сканирует QR-коды на изображении и возвращает список найденных ссылок."""
+    """Сканирует QR-коды на изображении с применением улучшений для повышения шанса распознавания."""
     try:
-        image = Image.open(io.BytesIO(image_bytes))
-        decoded_objects = decode(image)
-        links = []
-        for obj in decoded_objects:
-            data = obj.data.decode('utf-8', errors='ignore')
-            if data.startswith('http') or data.startswith('https'):
-                links.append(data)
-        return links
+        original_image = Image.open(io.BytesIO(image_bytes))
+        
+        # Создаем список вариаций картинки для pyzbar (он часто капризен)
+        variations = [original_image]
+        
+        # 1. ЧБ вариант
+        gray = original_image.convert('L')
+        variations.append(gray)
+        
+        # 2. Повышенный контраст
+        enhancer = ImageEnhance.Contrast(gray)
+        variations.append(enhancer.enhance(1.5))
+        variations.append(enhancer.enhance(2.0))
+        variations.append(enhancer.enhance(3.0))
+        
+        # 3. Бинаризация (черно-белый порог)
+        binary = gray.point(lambda p: 255 if p > 128 else 0, mode='1')
+        variations.append(binary)
+        
+        for img_var in variations:
+            decoded_objects = decode(img_var)
+            links = []
+            for obj in decoded_objects:
+                data = obj.data.decode('utf-8', errors='ignore')
+                if data.startswith('http') or data.startswith('https'):
+                    links.append(data)
+            
+            if links:
+                return links
+                
+        return []
     except Exception as e:
         print(f"[WARNING] QR scan error: {e}")
         return []

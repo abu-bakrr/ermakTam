@@ -104,7 +104,21 @@ MESSAGES = {
         "final_total": "\n<b>ИТОГО:</b> {val}",
         "final_ask": "\nВсё ли верно?",
         "qr_not_found": "❌ На фото не найден QR-код с ссылкой на soliq.uz. Пожалуйста, отправьте отдельное фото QR-кода с чека.",
-        "qr_found": "✅ Найдена ссылка на чек: {link}"
+        "qr_found": "✅ Найдена ссылка на чек: {link}",
+        "edit_menu_title": "Выберите, что хотите изменить:",
+        "edit_supplier_btn": "🏢 Поставщик",
+        "edit_item_btn": "🛍 {nom}",
+        "edit_done_btn": "✅ Готово",
+        "edit_full_manual_btn": "✏️ Ввести полностью вручную",
+        "edit_item_title": "Что изменить в товаре «{nom}»?",
+        "edit_name_btn": "🏷 Название",
+        "edit_price_btn": "💰 Цена",
+        "edit_qty_btn": "📦 Количество",
+        "edit_back_btn": "🔙 Назад",
+        "enter_new_supplier": "Введите нового поставщика:",
+        "enter_new_name": "Введите новое название:",
+        "enter_new_price": "Введите новую цену:",
+        "enter_new_qty": "Введите новое количество:"
     },
     "uz": {
         "choose_lang": "Tilni tanlang:",
@@ -177,6 +191,20 @@ MESSAGES = {
         "final_total": "\n<b>JAMI:</b> {val}",
         "final_ask": "\nBarchasi to'g'rimi?",
         "qr_not_found": "❌ Rasmlarda soliq.uz havolasi bilan QR-kod topilmadi. Iltimos, chekdan QR-kodning alohida rasmini yuboring.",
-        "qr_found": "✅ Chek havolasi topildi: {link}"
+        "qr_found": "✅ Chek havolasi topildi: {link}",
+        "edit_menu_title": "Nimani o'zgartirmoqchisiz, tanlang:",
+        "edit_supplier_btn": "🏢 Yetkazib beruvchi",
+        "edit_item_btn": "🛍 {nom}",
+        "edit_done_btn": "✅ Tayyor",
+        "edit_full_manual_btn": "✏️ To'liq qo'lda kiritish",
+        "edit_item_title": "«{nom}» mahsulotida nimani o'zgartirasiz?",
+        "edit_name_btn": "🏷 Nomi",
+        "edit_price_btn": "💰 Narxi",
+        "edit_qty_btn": "📦 Miqdori",
+        "edit_back_btn": "🔙 Ortga",
+        "enter_new_supplier": "Yangi yetkazib beruvchini kiriting:",
+        "enter_new_name": "Yangi nomni kiriting:",
+        "enter_new_price": "Yangi narxni kiriting:",
+        "enter_new_qty": "Yangi miqdorni kiriting:"
     }
 }
