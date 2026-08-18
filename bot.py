@@ -327,6 +327,7 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
         await state.update_data(
             ai_items=items,
             ai_supplier=parsed.get("supplier", ""),
+                ai_grand_total=parsed.get("grand_total", ""),
             ai_receipt_date=parsed.get("receipt_date", ""),
             photo_path=photo_path,  # Use soliq link as photo_path
             items_list=[]
@@ -361,9 +362,11 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
                 lines.append(f"  {i}. <b>{nom}</b>")
                 lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
 
-            if grand_total > 0:
+            if parsed.get('grand_total'):
+                lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
+            elif grand_total > 0:
                 grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
-                lines.append(f"\n💰 <b>Общая сумма чека:</b> {grand_total_str}")
+                lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
         else:
             lines.append(get_msg(user_id, "ai_no_items"))
 
@@ -486,6 +489,7 @@ async def process_qr_photo(message: types.Message, state: FSMContext):
             await state.update_data(
                 ai_items=items,
                 ai_supplier=parsed.get("supplier", ""),
+                ai_grand_total=parsed.get("grand_total", ""),
                 ai_receipt_date=parsed.get("receipt_date", ""),
                 photo_path=soliq_link,  # Use soliq link as photo_path
                 items_list=[]
@@ -520,9 +524,11 @@ async def process_qr_photo(message: types.Message, state: FSMContext):
                     lines.append(f"  {i}. <b>{nom}</b>")
                     lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
 
-                if grand_total > 0:
+                if parsed.get('grand_total'):
+                    lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
+                elif grand_total > 0:
                     grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
-                    lines.append(f"\n💰 <b>Общая сумма чека:</b> {grand_total_str}")
+                    lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
             else:
                 lines.append(get_msg(user_id, "ai_no_items"))
 
@@ -822,7 +828,11 @@ async def finish_and_confirm(message: types.Message, state: FSMContext):
         note=note_val
     ))
         
-    lines.append(get_msg(user_id, "final_total").format(val=f"{grand_total:,.0f}".replace(",", " ")))
+    ai_grand_total = data.get("ai_grand_total")
+    if data.get("is_ai_mode") and ai_grand_total:
+        lines.append(get_msg(user_id, "final_total").format(val=f"{ai_grand_total} (из ИИ)"))
+    else:
+        lines.append(get_msg(user_id, "final_total").format(val=f"{grand_total:,.0f}".replace(",", " ")))
     lines.append(get_msg(user_id, "final_ask"))
 
     kb = ReplyKeyboardMarkup(
@@ -896,14 +906,8 @@ async def show_edit_menu(message_or_callback, state: FSMContext, user_id: int):
         return
 
     buttons = []
-    # Button to edit supplier
-    buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_supplier_btn"), callback_data="edit_receipt_supplier")])
-    
-    # Buttons for each item
-    for i, item in enumerate(items):
-        nom = item.get("nomenclature", f"Товар {i+1}")
-        btn_text = get_msg(user_id, "edit_item_btn").format(nom=nom)
-        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"edit_receipt_item_{i}")])
+    # Button to edit grand total
+    buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_grand_total_btn"), callback_data="edit_receipt_grandtotal")])
         
     # Done button
     buttons.append([InlineKeyboardButton(text=get_msg(user_id, "edit_done_btn"), callback_data="edit_receipt_done")])
@@ -950,6 +954,12 @@ async def process_edit_receipt_callback(callback: types.CallbackQuery, state: FS
         await state.update_data(edit_target="supplier")
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_msg(user_id, "edit_back_btn"), callback_data="edit_back")]])
         await callback.message.edit_text(get_msg(user_id, "enter_new_supplier"), reply_markup=kb)
+        await state.set_state(Form.wait_edit_value)
+        
+    elif action == "grandtotal":
+        await state.update_data(edit_target="grandtotal")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=get_msg(user_id, "edit_back_btn"), callback_data="edit_back")]])
+        await callback.message.edit_text(get_msg(user_id, "enter_new_grand_total"), reply_markup=kb)
         await state.set_state(Form.wait_edit_value)
         
     elif action.startswith("item_"):
@@ -1009,6 +1019,8 @@ async def process_edit_value_msg(message: types.Message, state: FSMContext):
     
     if target == "supplier":
         await state.update_data(ai_supplier=message.text)
+    elif target == "grandtotal":
+        await state.update_data(ai_grand_total=message.text)
     elif target and target.startswith("item_"):
         parts = target.split("_")
         idx = int(parts[1])

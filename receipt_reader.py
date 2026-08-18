@@ -81,11 +81,13 @@ def parse_receipt_gemini(image_bytes: bytes, previously_found_items: list = None
     5. Дата на чеке может быть в разных форматах — приведи её к формату ДД.ММ.ГГГГ.
     6. Для поставщика: используй БРЕНД (Korzinka, Makro, Havas), а не юр. лицо (MCHJ, ООО). Если бренда нет — пиши юр. лицо.
     7. В поле price пиши ТОЛЬКО цифры, без пробелов, без "сум", без "UZS". Пример: "45000" или "45000.50".
+    8. Обязательно найди окончательную сумму чека (ИТОГО / JAMI). Будь очень внимателен к копейкам (точкам и нулям в конце), пиши сумму точно как на чеке.
 
     Верни СТРОГО JSON, без лишнего текста:
     {
       "receipt_date": "ДД.ММ.ГГГГ или пустая строка",
       "supplier": "Название магазина",
+      "grand_total": "Окончательная сумма чека (только цифры, например '150000' или '150000.50')",
       "items": [
         {
           "nomenclature": "Точное название товара с чека",
@@ -132,6 +134,7 @@ def parse_receipt_gemini(image_bytes: bytes, previously_found_items: list = None
             return {
                 "receipt_date": str(data.get("receipt_date", "")),
                 "supplier": str(data.get("supplier", "")),
+                "grand_total": str(data.get("grand_total", "")),
                 "items": data.get("items", [])
             }
             
@@ -146,6 +149,7 @@ def merge_receipts(results: list) -> dict:
     all_items = []
     receipt_date = ""
     supplier = ""
+    grand_total = ""
     seen = set()
     
     for r in results:
@@ -153,6 +157,8 @@ def merge_receipts(results: list) -> dict:
             receipt_date = r["receipt_date"]
         if not supplier and r.get("supplier"):
             supplier = r["supplier"]
+        if not grand_total and r.get("grand_total"):
+            grand_total = r["grand_total"]
         
         for item in r.get("items", []):
             key = (
@@ -167,6 +173,7 @@ def merge_receipts(results: list) -> dict:
     return {
         "receipt_date": receipt_date,
         "supplier": supplier,
+        "grand_total": grand_total,
         "items": all_items
     }
 
@@ -194,6 +201,7 @@ def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
     {{
       "receipt_date": "...",
       "supplier": "...",
+      "grand_total": "...",
       "items": [ ... ]
     }}
     """
@@ -211,6 +219,7 @@ def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
         return {
             "receipt_date": str(data.get("receipt_date", "")),
             "supplier": str(data.get("supplier", "")),
+            "grand_total": str(data.get("grand_total", "")),
             "items": data.get("items", [])
         }
     except Exception as e:

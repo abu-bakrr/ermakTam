@@ -119,7 +119,9 @@ MESSAGES = {
         "enter_new_name": "Введите новое название:",
         "enter_new_price": "Введите новую цену:",
         "enter_new_qty": "Введите новое количество:",
-        "edit_saved": "✅ Изменения успешно сохранены!"
+        "edit_saved": "✅ Изменения успешно сохранены!",
+        "edit_grand_total_btn": "💰 Общая сумма",
+        "enter_new_grand_total": "Введите новую общую сумму:"
     },
     "uz": {
         "choose_lang": "Tilni tanlang:",
@@ -207,6 +209,8 @@ MESSAGES = {
         "enter_new_name": "Yangi nomni kiriting:",
         "enter_new_price": "Yangi narxni kiriting:",
         "enter_new_qty": "Yangi miqdorni kiriting:",
-        "edit_saved": "✅ O'zgarishlar muvaffaqiyatli saqlandi!"
+        "edit_saved": "✅ O'zgarishlar muvaffaqiyatli saqlandi!",
+        "edit_grand_total_btn": "💰 Jami summa",
+        "enter_new_grand_total": "Yangi jami summani kiriting:"
     }
 }
