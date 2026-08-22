@@ -500,7 +500,7 @@ async def process_qr_photo(message: types.Message, state: FSMContext):
                 ai_supplier=parsed.get("supplier", ""),
                 ai_grand_total=parsed.get("grand_total", ""),
                 ai_receipt_date=parsed.get("receipt_date", ""),
-                photo_path=soliq_link,  # Use soliq link as photo_path
+                photo_path=photo_path, soliq_link=soliq_link,  # Keep actual photo, add soliq link separately
                 items_list=[]
             )
 

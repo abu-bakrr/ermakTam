@@ -20,7 +20,8 @@ HEADERS = [
     "Поставщик",
     "Исполнитель",
     "Примечание",
-    "Фото чека"
+    "Фото чека",
+    "QR Ссылка"
 ]
 
 COLUMN_WIDTHS = {
@@ -38,7 +39,8 @@ COLUMN_WIDTHS = {
     "L": 20,  
     "M": 20,  
     "N": 25,  
-    "O": 30,  
+    "O": 30,
+    "P": 30,
 }
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
@@ -236,6 +238,9 @@ def add_record(data: dict):
 
         next_num = get_next_number(ws)
 
+        soliq_link = data.get("soliq_link", "")
+        soliq_hyperlink = f'=HYPERLINK("{soliq_link}", "Смотреть QR")' if soliq_link else ""
+        
         row = [
             next_num,
             shop,
@@ -251,7 +256,8 @@ def add_record(data: dict):
             supplier,
             performer,
             data.get("note", ""),
-            photo_link
+            photo_link,
+            soliq_hyperlink
         ]
         
         ws.append(row)
@@ -259,7 +265,7 @@ def add_record(data: dict):
         current_row = ws.max_row
 
         for offset, link in enumerate(extra_photo_links, start=1):
-            ws.cell(row=current_row, column=15 + offset).value = link
+            ws.cell(row=current_row, column=16 + offset).value = link
 
         ws.cell(row=current_row, column=9).value = f"=G{current_row}*H{current_row}"
         ws.cell(row=current_row, column=7).number_format = '#,##0'
