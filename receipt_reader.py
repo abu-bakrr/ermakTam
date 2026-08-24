@@ -232,145 +232,109 @@ def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
         return merged_receipt_data
 
 
-def _fetch_uz_proxies() -> list:
-    """Загружает актуальный список HTTP-прокси из Узбекистана."""
-    import logging
-    try:
-        # ProxyScrape API - бесплатно, фильтр по стране UZ
-        url = "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=5000&country=UZ&ssl=all&anonymity=all"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code == 200 and resp.text.strip():
-            proxies = [p.strip() for p in resp.text.strip().split('\n') if p.strip()]
-            logging.info(f"[PROXY] Loaded {len(proxies)} UZ proxies from ProxyScrape")
-            return proxies
-    except Exception as e:
-        logging.warning(f"[PROXY] Failed to fetch proxy list: {e}")
-    return []
-
-
 def parse_receipt_soliq_api(soliq_link: str) -> dict | None:
     """Извлекает данные чека через официальный API Soliq."""
     import logging
     logging.info(f"==> parse_receipt_soliq_api START. Link: {soliq_link}")
-    API_URL = "https://ofd.soliq.uz/api/payment"
+    API_URL = "https://ofd.soliq.uz/api/payment"  # Обновлен URL на рабочий
     SECRET = "thisIsPaymentSecretKey123@#"
     
-    parsed_url = urlparse(soliq_link)
-    params = parse_qs(parsed_url.query)
-    
-    terminal_id = params.get("t", [None])[0]
-    payment_no = params.get("r", [None])[0]
-    payment_date = params.get("c", [None])[0]
-    fiscal_sign = params.get("s", [None])[0]
-    fiscal_sign_hash = params.get("h", [None])[0]
-    
-    logging.info(f"[SOLIQ API] Parsed params: t={terminal_id}, r={payment_no}, c={payment_date}")
-    
-    if not terminal_id or not payment_no or not payment_date:
-        logging.error("[SOLIQ API] Missing required params in URL!")
+    try:
+        parsed = urlparse(soliq_link)
+        params = parse_qs(parsed.query)
+        
+        terminal_id = params.get("t", [None])[0]
+        payment_no = params.get("r", [None])[0]
+        payment_date = params.get("c", [None])[0]
+        fiscal_sign = params.get("s", [None])[0]
+        fiscal_sign_hash = params.get("h", [None])[0]
+        
+        logging.info(f"[SOLIQ API] Parsed params: t={terminal_id}, r={payment_no}, c={payment_date}, s={fiscal_sign}, h={fiscal_sign_hash}")
+        
+        if not terminal_id or not payment_no or not payment_date:
+            logging.error("[SOLIQ API] Missing required params in URL!")
+            return None
+            
+        data = {
+            "terminalId": terminal_id,
+            "paymentNo": payment_no,
+            "paymentDate": payment_date,
+            "paymentType": "CHECK",
+        }
+        if fiscal_sign: data["fiscalSign"] = fiscal_sign
+        if fiscal_sign_hash: data["fiscalSignHash"] = fiscal_sign_hash
+        
+        timestamp = str(int(time.time()))
+        message = f"{terminal_id}:{payment_no}:{timestamp}"
+        signature = hmac.new(SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+        
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Timestamp": timestamp,
+            "X-Signature": signature,
+        }
+        
+        logging.info(f"[SOLIQ API] Sending POST request to {API_URL} with data: {data}")
+        response = requests.post(API_URL, json=data, headers=headers, timeout=10)
+        logging.info(f"[SOLIQ API] Response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logging.error(f"[SOLIQ API] Error response body: {response.text[:1000]}")
+            return None
+            
+        result = response.json()
+    except Exception as e:
+        logging.exception(f"[SOLIQ API] Exception during request/parsing: {e}")
         return None
         
-    data = {
-        "terminalId": terminal_id,
-        "paymentNo": payment_no,
-        "paymentDate": payment_date,
-        "paymentType": "CHECK",
-    }
-    if fiscal_sign: data["fiscalSign"] = fiscal_sign
-    if fiscal_sign_hash: data["fiscalSignHash"] = fiscal_sign_hash
+    receipt = result.get("data", result)
+    if not isinstance(receipt, dict):
+        logging.error(f"[SOLIQ API] Unexpected JSON structure: {result}")
+        return None
+        
+    logging.info("[SOLIQ API] Successfully parsed API response JSON. Extracting fields...")
+        
+    company = receipt.get("extraInfo", {})
+    if not isinstance(company, dict):
+        company = {}
+    supplier = str(company.get("companyName", ""))
     
-    timestamp = str(int(time.time()))
-    message = f"{terminal_id}:{payment_no}:{timestamp}"
-    signature = hmac.new(SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-    
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-    }
-    
-    # Сначала пробуем прямое соединение
-    attempts = [(None, "direct")]
-    
-    # Затем перебираем UZ прокси
-    uz_proxies = _fetch_uz_proxies()
-    for proxy_addr in uz_proxies[:10]:  # Не более 10 попыток
-        attempts.append(({"http": f"http://{proxy_addr}", "https": f"http://{proxy_addr}"}, proxy_addr))
-    
-    for proxies_dict, label in attempts:
+    date_val = receipt.get("paymentDate", payment_date)
+    if date_val and len(date_val) >= 8:
+        # Expected YYYYMMDDHHMMSS e.g. 20240824... -> DD.MM.YYYY
+        receipt_date = f"{date_val[6:8]}.{date_val[4:6]}.{date_val[0:4]}"
+    else:
+        receipt_date = ""
+        
+    products = receipt.get("paymentDetails", [])
+    items = []
+    total_calc = 0
+    for p in products:
+        name = p.get("name", "Неизвестный товар")
+        amount = p.get("amount", p.get("quantity", 0))
+        price = p.get("price", p.get("voucher", 0))
+        
+        items.append({
+            "nomenclature": str(name),
+            "price": str(price),
+            "quantity": str(amount)
+        })
         try:
-            logging.info(f"[SOLIQ API] Trying via: {label}")
-            response = requests.post(
-                API_URL, json=data, headers=headers,
-                timeout=8, proxies=proxies_dict
-            )
-            logging.info(f"[SOLIQ API] Response {response.status_code} via {label}")
+            total_calc += float(price)
+        except:
+            pass
             
-            if response.status_code != 200:
-                logging.warning(f"[SOLIQ API] Non-200 via {label}: {response.text[:300]}")
-                continue
-                
-            result = response.json()
-            logging.info(f"[SOLIQ API] SUCCESS via {label}!")
-            
-            receipt = result.get("data", result)
-            if not isinstance(receipt, dict):
-                logging.error(f"[SOLIQ API] Unexpected JSON structure: {str(result)[:200]}")
-                return None
-            
-            logging.info("[SOLIQ API] Successfully parsed response. Extracting fields...")
-            
-            company = receipt.get("extraInfo", {})
-            if not isinstance(company, dict):
-                company = {}
-            supplier = str(company.get("companyName", ""))
-            
-            date_val = receipt.get("paymentDate", payment_date)
-            if date_val and len(str(date_val)) >= 8:
-                dv = str(date_val).replace(".", "").replace(" ", "").replace(":", "")
-                if len(dv) >= 8:
-                    receipt_date = f"{dv[6:8]}.{dv[4:6]}.{dv[0:4]}"
-                else:
-                    receipt_date = str(date_val)
-            else:
-                receipt_date = ""
-                
-            products = receipt.get("paymentDetails", [])
-            items = []
-            total_calc = 0
-            for p in products:
-                name = p.get("name", "Неизвестный товар")
-                amount = p.get("amount", p.get("quantity", 0))
-                price = p.get("price", p.get("voucher", 0))
-                
-                items.append({
-                    "nomenclature": str(name),
-                    "price": str(price),
-                    "quantity": str(amount)
-                })
-                try:
-                    total_calc += float(price)
-                except:
-                    pass
-                    
-            cash = receipt.get("cashTotal", 0)
-            card = receipt.get("cardTotal", 0)
-            try:
-                grand_total = float(cash) + float(card)
-            except:
-                grand_total = total_calc
-                
-            return {
-                "receipt_date": receipt_date,
-                "supplier": supplier,
-                "grand_total": str(grand_total),
-                "items": items
-            }
-            
-        except Exception as e:
-            logging.warning(f"[SOLIQ API] Attempt via {label} failed: {e}")
-            continue
-    
-    logging.error("[SOLIQ API] All attempts failed (direct + proxies). Returning None.")
-    return None
+    cash = receipt.get("cashTotal", 0)
+    card = receipt.get("cardTotal", 0)
+    try:
+        grand_total = float(cash) + float(card)
+    except:
+        grand_total = total_calc
+        
+    return {
+        "receipt_date": receipt_date,
+        "supplier": supplier,
+        "grand_total": str(grand_total),
+        "items": items
+    }

@@ -283,7 +283,7 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
             pass
 
 
-        # Fallback to Gemini if API failed (or if you want to run it anyway)
+        # Fallback to Gemini if API failed
         if not ai_results:
             accumulated_items = []
             for p in photos:
@@ -300,17 +300,16 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
             raise Exception("All AI parsing failed")
 
         raw_parsed = receipt_reader.merge_receipts(ai_results)
-
-        # Final AI cleanup
         parsed = await loop.run_in_executor(None, receipt_reader.clean_receipt_with_ai, raw_parsed)
         items = parsed.get("items", [])
 
         await state.update_data(
             ai_items=items,
+            is_ai_mode=True,
             ai_supplier=parsed.get("supplier", ""),
-                ai_grand_total=parsed.get("grand_total", ""),
+            ai_grand_total=parsed.get("grand_total", ""),
             ai_receipt_date=parsed.get("receipt_date", ""),
-            photo_path=photo_path,  # Use soliq link as photo_path
+            photo_path="",
             items_list=[]
         )
 
@@ -321,10 +320,8 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
             lines.append(get_msg(user_id, "ai_date").format(val=parsed['receipt_date']))
         else:
             lines.append(get_msg(user_id, "ai_date_not_found"))
-
         lines.append(get_msg(user_id, "ai_supplier").format(val=parsed.get('supplier') or '—'))
         lines.append("")
-
         if items:
             lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
             grand_total = 0
@@ -342,34 +339,22 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
                     total_str = "?"
                 lines.append(f"  {i}. <b>{nom}</b>")
                 lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
-
             if parsed.get('grand_total'):
-                lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
+                lines.append(f"\n💰 <b>Сумма:</b> {parsed['grand_total']}")
             elif grand_total > 0:
                 grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
-                lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
+                lines.append(f"\n💰 <b>Сумма (расчет):</b> {grand_total_str}")
         else:
             lines.append(get_msg(user_id, "ai_no_items"))
 
         await message.answer("\n".join(lines), parse_mode="HTML")
 
-        if items:
-            kb = ReplyKeyboardMarkup(
-                keyboard=[
-                    [KeyboardButton(text=get_msg(user_id, "yes")), KeyboardButton(text=get_msg(user_id, "no"))],
-                    [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
-                ],
-                resize_keyboard=True
-            )
-            await message.answer(get_msg(user_id, "ai_confirm_prompt"), reply_markup=kb)
-            await state.set_state(Form.confirm_receipt)
-        else:
-            await state.update_data(is_ai_mode=False)
-            await message.answer(
-                get_msg(user_id, "ai_partial_fail"),
-                reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
-            )
-            await state.set_state(Form.shop)
+        # Go straight to shop selection — no confirmation needed
+        await message.answer(
+            get_msg(user_id, "ai_yes_success"),
+            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+        )
+        await state.set_state(Form.shop)
 
     except Exception as e:
         logging.error(f"OCR error: {e}")
@@ -381,28 +366,18 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.shop)
 
+
 @dp.message(Form.confirm_receipt)
 async def process_confirm_receipt(message: types.Message, state: FSMContext):
+    """Kept for legacy fallback, but no longer used in main flow."""
     user_id = message.from_user.id
-    if message.text == get_msg(user_id, "yes"):
-        await state.update_data(is_ai_mode=True)
-        await message.answer(
-            get_msg(user_id, "ai_yes_success"),
-            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
-        )
-        await state.set_state(Form.shop)
-    elif message.text == get_msg(user_id, "no"):
-        kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text=get_msg(user_id, "edit_full_manual_btn"))],
-                [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
-            ],
-            resize_keyboard=True
-        )
-        await message.answer(get_msg(user_id, "enter_new_grand_total"), reply_markup=kb)
-        await state.set_state(Form.wait_direct_grand_total)
-    else:
-        await message.answer(get_msg(user_id, "press_yes_no"))
+    await state.update_data(is_ai_mode=True)
+    await message.answer(
+        get_msg(user_id, "ai_yes_success"),
+        reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+    )
+    await state.set_state(Form.shop)
+
 
 @dp.message(Form.waiting_receipt)
 async def receipt_no_photo(message: types.Message, state: FSMContext):
@@ -441,6 +416,7 @@ async def process_qr(message: types.Message, state: FSMContext):
                 items = parsed.get("items", [])
                 await state.update_data(
                     ai_items=items,
+                    is_ai_mode=True,
                     ai_supplier=parsed.get("supplier", ""),
                     ai_grand_total=parsed.get("grand_total", ""),
                     ai_receipt_date=parsed.get("receipt_date", ""),
@@ -456,10 +432,8 @@ async def process_qr(message: types.Message, state: FSMContext):
                     lines.append(get_msg(user_id, "ai_date").format(val=parsed['receipt_date']))
                 else:
                     lines.append(get_msg(user_id, "ai_date_not_found"))
-
                 lines.append(get_msg(user_id, "ai_supplier").format(val=parsed.get('supplier') or '—'))
                 lines.append("")
-
                 if items:
                     lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
                     grand_total = 0
@@ -477,35 +451,24 @@ async def process_qr(message: types.Message, state: FSMContext):
                             total_str = "?"
                         lines.append(f"  {i}. <b>{nom}</b>")
                         lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
-
                     if parsed.get('grand_total'):
-                        lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
+                        lines.append(f"\n💰 <b>Сумма:</b> {parsed['grand_total']}")
                     elif grand_total > 0:
                         grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
-                        lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
+                        lines.append(f"\n💰 <b>Сумма (расчет):</b> {grand_total_str}")
                 else:
                     lines.append(get_msg(user_id, "ai_no_items"))
 
                 await message.answer("\n".join(lines), parse_mode="HTML")
 
-                if items:
-                    kb = ReplyKeyboardMarkup(
-                        keyboard=[
-                            [KeyboardButton(text=get_msg(user_id, "yes")), KeyboardButton(text=get_msg(user_id, "no"))],
-                            [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
-                        ],
-                        resize_keyboard=True
-                    )
-                    await message.answer(get_msg(user_id, "ai_confirm_prompt"), reply_markup=kb)
-                    await state.set_state(Form.confirm_receipt)
-                else:
-                    await state.update_data(is_ai_mode=False)
-                    await message.answer(
-                        get_msg(user_id, "ai_partial_fail"),
-                        reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
-                    )
-                    await state.set_state(Form.shop)
+                # Go straight to shop selection — no confirmation needed
+                await message.answer(
+                    get_msg(user_id, "ai_yes_success"),
+                    reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+                )
+                await state.set_state(Form.shop)
                 return
+
 
         # If we reach here, API failed or no QR link found.
         # Fallback to asking for full receipt photo
@@ -749,6 +712,7 @@ async def process_receipt_note(message: types.Message, state: FSMContext):
     await finish_and_confirm(message, state)
 
 async def finish_and_confirm(message: types.Message, state: FSMContext):
+    """Directly saves the record without asking for confirmation."""
     user_id = message.from_user.id
     data = await state.get_data()
     items = data.get("items_list", [])
@@ -758,15 +722,18 @@ async def finish_and_confirm(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    performer = users_db.get(user_id, {}).get("performer", "Неизвестно")
+    shop = data.get("shop", "")
+    org = config.SHOP_TO_ORG.get(shop, "")
     payment = data.get('payment_type', '')
     if data.get('card_number'):
         payment += f" ({data.get('card_number')})"
 
+    # Show summary before saving
     lines = [get_msg(user_id, "final_check_header")]
-    lines.append(get_msg(user_id, "final_shop").format(val=data.get('shop')))
+    lines.append(get_msg(user_id, "final_shop").format(val=shop))
     lines.append(get_msg(user_id, "final_payment").format(val=payment))
     lines.append(get_msg(user_id, "final_supplier").format(val=data.get('supplier')))
-    
     lines.append(get_msg(user_id, "final_items_header").format(val=len(items)))
     
     grand_total = 0
@@ -780,76 +747,76 @@ async def finish_and_confirm(message: types.Message, state: FSMContext):
             grand_total += total
         except:
             total = 0
-            
         lines.append(get_msg(user_id, "final_item_line").format(
-            i=i, 
-            nom=item.get('nomenclature'), 
-            qty=item.get('quantity'), 
-            price=item.get('price'), 
-            total=f"{total:,.0f}".replace(",", " ")
+            i=i, nom=item.get('nomenclature'), qty=item.get('quantity'),
+            price=item.get('price'), total=f"{total:,.0f}".replace(",", " ")
         ))
-        
-    note_val = data.get('note', '') or '—'
-    lines.append(get_msg(user_id, "final_receipt_tmc_note").format(
-        tmc=data.get('tmc_group', '—'), 
-        note=note_val
-    ))
-        
+    
     ai_grand_total = data.get("ai_grand_total")
     if data.get("is_ai_mode") and ai_grand_total:
-        lines.append(get_msg(user_id, "final_total").format(val=f"{ai_grand_total} (из ИИ)"))
+        lines.append(get_msg(user_id, "final_total").format(val=f"{ai_grand_total}"))
     else:
         lines.append(get_msg(user_id, "final_total").format(val=f"{grand_total:,.0f}".replace(",", " ")))
-    lines.append(get_msg(user_id, "final_ask"))
 
-    kb = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=get_msg(user_id, "yes")), KeyboardButton(text=get_msg(user_id, "no"))],
-            [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
-        ],
-        resize_keyboard=True
-    )
-    await message.answer("\n".join(lines), reply_markup=kb, parse_mode="HTML")
-    await state.set_state(Form.confirm)
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+    # Save directly
+    record_data = {
+        "shop": shop,
+        "organization": org,
+        "performer": performer,
+        "payment_type": data.get("payment_type", ""),
+        "card_number": data.get("card_number", ""),
+        "supplier": data.get("supplier", ""),
+        "receipt_date": data.get("ai_receipt_date", ""),
+        "items": items,
+        "photo_path": data.get("photo_path", ""),
+        "tmc_group": data.get("tmc_group", ""),
+        "note": data.get("note", "")
+    }
+    try:
+        excel_writer.add_record(record_data)
+        await message.answer(get_msg(user_id, "success"), reply_markup=get_main_menu_kb(user_id))
+    except Exception as e:
+        logging.error(f"Error saving to excel: {e}")
+        await message.answer(get_msg(user_id, "error") + f"\n{e}", reply_markup=get_main_menu_kb(user_id))
+    
+    await state.clear()
+
 
 @dp.message(Form.confirm)
 async def process_confirm(message: types.Message, state: FSMContext):
+    """Direct save — no longer prompts for confirmation."""
     user_id = message.from_user.id
-    if message.text == get_msg(user_id, "yes"):
-        data = await state.get_data()
-        
-        performer = users_db.get(user_id, {}).get("performer", "Неизвестно")
-        shop = data.get("shop", "")
-        org = config.SHOP_TO_ORG.get(shop, "")
-        
-        record_data = {
-            "shop": shop,
-            "organization": org,
-            "performer": performer,
-            "payment_type": data.get("payment_type", ""),
-            "card_number": data.get("card_number", ""),
-            "supplier": data.get("supplier", ""),
-            "receipt_date": data.get("ai_receipt_date", ""),
-            "items": data.get("items_list", []),
-            "photo_path": data.get("photo_path", ""),
-            "tmc_group": data.get("tmc_group", ""),
-            "note": data.get("note", "")
-        }
-        
-        try:
-            excel_writer.add_record(record_data)
-            await message.answer(get_msg(user_id, "success"), reply_markup=get_main_menu_kb(user_id))
-        except Exception as e:
-            logging.error(f"Error saving to excel: {e}")
-            await message.answer(get_msg(user_id, "error") + f"\n{e}", reply_markup=get_main_menu_kb(user_id))
-            
-        await state.clear()
-        
-    elif message.text == get_msg(user_id, "no"):
-        await message.answer(get_msg(user_id, "cancelled"), reply_markup=get_main_menu_kb(user_id))
-        await state.clear()
-    else:
-        await message.answer(get_msg(user_id, "press_yes_no"))
+    data = await state.get_data()
+    
+    performer = users_db.get(user_id, {}).get("performer", "Неизвестно")
+    shop = data.get("shop", "")
+    org = config.SHOP_TO_ORG.get(shop, "")
+    
+    record_data = {
+        "shop": shop,
+        "organization": org,
+        "performer": performer,
+        "payment_type": data.get("payment_type", ""),
+        "card_number": data.get("card_number", ""),
+        "supplier": data.get("supplier", ""),
+        "receipt_date": data.get("ai_receipt_date", ""),
+        "items": data.get("items_list", []),
+        "photo_path": data.get("photo_path", ""),
+        "tmc_group": data.get("tmc_group", ""),
+        "note": data.get("note", "")
+    }
+    
+    try:
+        excel_writer.add_record(record_data)
+        await message.answer(get_msg(user_id, "success"), reply_markup=get_main_menu_kb(user_id))
+    except Exception as e:
+        logging.error(f"Error saving to excel: {e}")
+        await message.answer(get_msg(user_id, "error") + f"\n{e}", reply_markup=get_main_menu_kb(user_id))
+    
+    await state.clear()
+
 
 
 @dp.message(Form.wait_direct_grand_total)
