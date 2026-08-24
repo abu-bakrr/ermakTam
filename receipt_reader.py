@@ -2,6 +2,11 @@ import os
 import json
 import io
 import platform
+import requests
+import hashlib
+import hmac
+import time
+from urllib.parse import urlparse, parse_qs
 
 # Configure zbar library path for pyzbar on macOS
 if platform.system() == "Darwin":
@@ -225,3 +230,98 @@ def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
     except Exception as e:
         print(f"[WARNING] Ошибка финальной очистки: {e}")
         return merged_receipt_data
+
+
+def parse_receipt_soliq_api(soliq_link: str) -> dict | None:
+    """Извлекает данные чека через официальный API Soliq."""
+    API_URL = "https://new-ofd.soliq.uz/api/payment"
+    SECRET = "thisIsPaymentSecretKey123@#"
+    
+    parsed = urlparse(soliq_link)
+    params = parse_qs(parsed.query)
+    
+    terminal_id = params.get("t", [None])[0]
+    payment_no = params.get("r", [None])[0]
+    payment_date = params.get("c", [None])[0]
+    fiscal_sign = params.get("s", [None])[0]
+    fiscal_sign_hash = params.get("h", [None])[0]
+    
+    if not terminal_id or not payment_no or not payment_date:
+        return None
+        
+    data = {
+        "terminalId": terminal_id,
+        "paymentNo": payment_no,
+        "paymentDate": payment_date,
+        "paymentType": "CHECK",
+    }
+    if fiscal_sign: data["fiscalSign"] = fiscal_sign
+    if fiscal_sign_hash: data["fiscalSignHash"] = fiscal_sign_hash
+    
+    timestamp = str(int(time.time()))
+    message = f"{terminal_id}:{payment_no}:{timestamp}"
+    signature = hmac.new(SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Timestamp": timestamp,
+        "X-Signature": signature,
+    }
+    
+    try:
+        response = requests.post(API_URL, json=data, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return None
+        result = response.json()
+    except Exception as e:
+        print(f"[WARNING] Soliq API error: {e}")
+        return None
+        
+    receipt = result.get("data", result)
+    if not isinstance(receipt, dict):
+        return None
+        
+    company = receipt.get("extraInfo", {})
+    if not isinstance(company, dict):
+        company = {}
+    supplier = str(company.get("companyName", ""))
+    
+    date_val = receipt.get("paymentDate", payment_date)
+    if date_val and len(date_val) >= 8:
+        # Expected YYYYMMDDHHMMSS e.g. 20240824... -> DD.MM.YYYY
+        receipt_date = f"{date_val[6:8]}.{date_val[4:6]}.{date_val[0:4]}"
+    else:
+        receipt_date = ""
+        
+    products = receipt.get("paymentDetails", [])
+    items = []
+    total_calc = 0
+    for p in products:
+        name = p.get("name", "Неизвестный товар")
+        amount = p.get("amount", p.get("quantity", 0))
+        price = p.get("price", p.get("voucher", 0))
+        
+        items.append({
+            "nomenclature": str(name),
+            "price": str(price),
+            "quantity": str(amount)
+        })
+        try:
+            total_calc += float(price)
+        except:
+            pass
+            
+    cash = receipt.get("cashTotal", 0)
+    card = receipt.get("cardTotal", 0)
+    try:
+        grand_total = float(cash) + float(card)
+    except:
+        grand_total = total_calc
+        
+    return {
+        "receipt_date": receipt_date,
+        "supplier": supplier,
+        "grand_total": str(grand_total),
+        "items": items
+    }

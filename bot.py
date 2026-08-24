@@ -215,14 +215,13 @@ async def receipt_cmd(message: types.Message, state: FSMContext):
         await lang_cmd(message, state)
         return
     await state.update_data(receipt_photos=[])
-    done_btn = get_msg(user_id, "done_btn")
     cancel_btn = get_msg(user_id, "cancel_btn")
     kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=done_btn)], [KeyboardButton(text=cancel_btn)]],
+        keyboard=[[KeyboardButton(text=cancel_btn)]],
         resize_keyboard=True
     )
-    await message.answer(get_msg(user_id, "send_receipt_prompt"), reply_markup=kb)
-    await state.set_state(Form.waiting_receipt)
+    await message.answer(get_msg(user_id, "send_qr_prompt"), reply_markup=kb)
+    await state.set_state(Form.waiting_qr)
 
 @dp.message(Form.waiting_receipt, F.photo)
 async def process_receipt_photo(message: types.Message, state: FSMContext):
@@ -270,51 +269,32 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
 
         # 1. Scan QR codes for soliq link
         soliq_link = await loop.run_in_executor(None, receipt_reader.find_soliq_link, photos)
-
+        original_photo_path = ",".join(photos) if photos else ""
+        ai_results = []
+        
         if soliq_link:
             await wait_msg.edit_text(get_msg(user_id, "qr_found").format(link=soliq_link))
-            photo_path = soliq_link
+            # Try API first
+            api_parsed = await loop.run_in_executor(None, receipt_reader.parse_receipt_soliq_api, soliq_link)
+            if api_parsed and api_parsed.get("items"):
+                ai_results = [api_parsed]
         else:
-            # No soliq QR found - ask user to send QR photo
-            await wait_msg.delete()
-            await state.update_data(receipt_photos=photos)
-            kb = ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text=get_msg(user_id, "cancel_btn"))]],
-                resize_keyboard=True
-            )
-            await message.answer(get_msg(user_id, "qr_not_found"), reply_markup=kb)
-            await state.set_state(Form.waiting_qr)
-            return
+            # No soliq QR found - fallback to Gemini
+            pass
 
-        def upload_to_cloudinary(img_data):
-            try:
-                res = cloudinary.uploader.upload(img_data, resource_type="image")
-                return res.get("secure_url", "")
-            except Exception as e:
-                logging.warning(f"Cloudinary upload failed: {e}")
-                return ""
 
-        cloud_tasks = [
-            loop.run_in_executor(None, upload_to_cloudinary, p)
-            for p in photos
-        ]
-
-        ai_results = []
-        accumulated_items = []
-
-        for p in photos:
-            try:
-                # Pass accumulated_items to the parser
-                r = await loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, p, accumulated_items)
-                if isinstance(r, dict):
-                    ai_results.append(r)
-                    if "items" in r:
-                        accumulated_items.extend(r["items"])
-            except Exception as e:
-                logging.warning(f"AI parse error for one photo: {e}")
-
-        cloudinary_urls = await asyncio.gather(*cloud_tasks)
-        cloudinary_url = ",".join(url for url in cloudinary_urls if url)
+        # Fallback to Gemini if API failed (or if you want to run it anyway)
+        if not ai_results:
+            accumulated_items = []
+            for p in photos:
+                try:
+                    r = await loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, p, accumulated_items)
+                    if isinstance(r, dict):
+                        ai_results.append(r)
+                        if "items" in r:
+                            accumulated_items.extend(r["items"])
+                except Exception as e:
+                    logging.warning(f"AI parse error for one photo: {e}")
 
         if not ai_results:
             raise Exception("All AI parsing failed")
@@ -429,158 +409,136 @@ async def receipt_no_photo(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     await message.answer(get_msg(user_id, "only_photo"))
 
-@dp.message(Form.waiting_qr, F.photo)
-async def process_qr_photo(message: types.Message, state: FSMContext):
+@dp.message(Form.waiting_qr)
+async def process_qr(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    photo = message.photo[-1]
-    file_info = await bot.get_file(photo.file_id)
-    file_bytes = io.BytesIO()
-    await bot.download_file(file_info.file_path, file_bytes)
-    img_data = file_bytes.getvalue()
+    
+    # If user cancels
+    if message.text in [config.MESSAGES["ru"]["cancel_btn"], config.MESSAGES["uz"]["cancel_btn"], "/cancel"]:
+        return await cancel_handler(message, state)
 
     wait_msg = await message.answer(get_msg(user_id, "reading_receipt").format(n=1))
 
     try:
         loop = asyncio.get_event_loop()
+        soliq_link = None
 
-        # Scan QR code on the new photo
-        soliq_link = await loop.run_in_executor(None, receipt_reader.find_soliq_link, [img_data])
-
-        await wait_msg.delete()
+        if message.photo:
+            photo = message.photo[-1]
+            file_info = await bot.get_file(photo.file_id)
+            file_bytes = io.BytesIO()
+            await bot.download_file(file_info.file_path, file_bytes)
+            img_data = file_bytes.getvalue()
+            soliq_link = await loop.run_in_executor(None, receipt_reader.find_soliq_link, [img_data])
+        elif message.text and "soliq" in message.text.lower():
+            soliq_link = message.text
 
         if soliq_link:
-            data = await state.get_data()
-            photos = data.get("receipt_photos", [])
-
-            await message.answer(get_msg(user_id, "qr_found").format(link=soliq_link))
-
-            # Now process the receipt photos with the soliq link
-            wait_msg2 = await message.answer(
-                get_msg(user_id, "reading_receipt_multi").format(n=len(photos))
-            )
-
-            def upload_to_cloudinary(img_data):
-                try:
-                    res = cloudinary.uploader.upload(img_data, resource_type="image")
-                    return res.get("secure_url", "")
-                except Exception as e:
-                    logging.warning(f"Cloudinary upload failed: {e}")
-                    return ""
-
-            cloud_tasks = [
-                loop.run_in_executor(None, upload_to_cloudinary, p)
-                for p in photos
-            ]
-
-            ai_results = []
-            accumulated_items = []
-
-            for p in photos:
-                try:
-                    r = await loop.run_in_executor(None, receipt_reader.parse_receipt_gemini, p, accumulated_items)
-                    if isinstance(r, dict):
-                        ai_results.append(r)
-                        if "items" in r:
-                            accumulated_items.extend(r["items"])
-                except Exception as e:
-                    logging.warning(f"AI parse error for one photo: {e}")
-
-            cloudinary_urls = await asyncio.gather(*cloud_tasks)
-            cloudinary_url = ",".join(url for url in cloudinary_urls if url)
-
-            if not ai_results:
-                raise Exception("All AI parsing failed")
-
-            raw_parsed = receipt_reader.merge_receipts(ai_results)
-            parsed = await loop.run_in_executor(None, receipt_reader.clean_receipt_with_ai, raw_parsed)
-            items = parsed.get("items", [])
-
-            await state.update_data(
-                ai_items=items,
-                ai_supplier=parsed.get("supplier", ""),
-                ai_grand_total=parsed.get("grand_total", ""),
-                ai_receipt_date=parsed.get("receipt_date", ""),
-                photo_path=photo_path, soliq_link=soliq_link,  # Keep actual photo, add soliq link separately
-                items_list=[]
-            )
-
-            await wait_msg2.delete()
-
-            lines = [get_msg(user_id, "ai_recognized")]
-            if parsed.get('receipt_date'):
-                lines.append(get_msg(user_id, "ai_date").format(val=parsed['receipt_date']))
-            else:
-                lines.append(get_msg(user_id, "ai_date_not_found"))
-
-            lines.append(get_msg(user_id, "ai_supplier").format(val=parsed.get('supplier') or '—'))
-            lines.append("")
-
-            if items:
-                lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
-                grand_total = 0
-                for i, item in enumerate(items, 1):
-                    nom = item.get("nomenclature", "—")
-                    price = item.get("price", "—")
-                    qty = item.get("quantity", "—")
-                    try:
-                        p = float(str(price).replace(",", ".").replace(" ", ""))
-                        q = float(str(qty).replace(",", ".").replace(" ", ""))
-                        item_total = p * q
-                        grand_total += item_total
-                        total_str = f"{item_total:,.0f}".replace(",", " ")
-                    except:
-                        total_str = "?"
-                    lines.append(f"  {i}. <b>{nom}</b>")
-                    lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
-
-                if parsed.get('grand_total'):
-                    lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
-                elif grand_total > 0:
-                    grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
-                    lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
-            else:
-                lines.append(get_msg(user_id, "ai_no_items"))
-
-            await message.answer("\n".join(lines), parse_mode="HTML")
-
-            if items:
-                kb = ReplyKeyboardMarkup(
-                    keyboard=[
-                        [KeyboardButton(text=get_msg(user_id, "yes")), KeyboardButton(text=get_msg(user_id, "no"))],
-                        [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
-                    ],
-                    resize_keyboard=True
+            await wait_msg.edit_text(get_msg(user_id, "qr_found").format(link=soliq_link))
+            
+            parsed = await loop.run_in_executor(None, receipt_reader.parse_receipt_soliq_api, soliq_link)
+            if parsed and parsed.get("items"):
+                items = parsed.get("items", [])
+                await state.update_data(
+                    ai_items=items,
+                    ai_supplier=parsed.get("supplier", ""),
+                    ai_grand_total=parsed.get("grand_total", ""),
+                    ai_receipt_date=parsed.get("receipt_date", ""),
+                    photo_path="", 
+                    soliq_link=soliq_link,
+                    items_list=[]
                 )
-                await message.answer(get_msg(user_id, "ai_confirm_prompt"), reply_markup=kb)
-                await state.set_state(Form.confirm_receipt)
-            else:
-                await state.update_data(is_ai_mode=False)
-                await message.answer(
-                    get_msg(user_id, "ai_partial_fail"),
-                    reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
-                )
-                await state.set_state(Form.shop)
-        else:
-            # Still no QR found - ask again
-            kb = ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text=get_msg(user_id, "cancel_btn"))]],
-                resize_keyboard=True
-            )
-            await message.answer(get_msg(user_id, "qr_not_found"), reply_markup=kb)
+
+                await wait_msg.delete()
+
+                lines = [get_msg(user_id, "ai_recognized")]
+                if parsed.get('receipt_date'):
+                    lines.append(get_msg(user_id, "ai_date").format(val=parsed['receipt_date']))
+                else:
+                    lines.append(get_msg(user_id, "ai_date_not_found"))
+
+                lines.append(get_msg(user_id, "ai_supplier").format(val=parsed.get('supplier') or '—'))
+                lines.append("")
+
+                if items:
+                    lines.append(get_msg(user_id, "ai_items_header").format(val=len(items)))
+                    grand_total = 0
+                    for i, item in enumerate(items, 1):
+                        nom = item.get("nomenclature", "—")
+                        price = item.get("price", "—")
+                        qty = item.get("quantity", "—")
+                        try:
+                            p = float(str(price).replace(",", ".").replace(" ", ""))
+                            q = float(str(qty).replace(",", ".").replace(" ", ""))
+                            item_total = p * q
+                            grand_total += item_total
+                            total_str = f"{item_total:,.0f}".replace(",", " ")
+                        except:
+                            total_str = "?"
+                        lines.append(f"  {i}. <b>{nom}</b>")
+                        lines.append(get_msg(user_id, "ai_item_calc").format(price=price, qty=qty, total=total_str))
+
+                    if parsed.get('grand_total'):
+                        lines.append(f"\n💰 <b>Общая сумма чека (из ИИ):</b> {parsed['grand_total']}")
+                    elif grand_total > 0:
+                        grand_total_str = f"{grand_total:,.0f}".replace(",", " ")
+                        lines.append(f"\n💰 <b>Общая сумма чека (расчет):</b> {grand_total_str}")
+                else:
+                    lines.append(get_msg(user_id, "ai_no_items"))
+
+                await message.answer("\n".join(lines), parse_mode="HTML")
+
+                if items:
+                    kb = ReplyKeyboardMarkup(
+                        keyboard=[
+                            [KeyboardButton(text=get_msg(user_id, "yes")), KeyboardButton(text=get_msg(user_id, "no"))],
+                            [KeyboardButton(text=get_msg(user_id, "cancel_btn"))]
+                        ],
+                        resize_keyboard=True
+                    )
+                    await message.answer(get_msg(user_id, "ai_confirm_prompt"), reply_markup=kb)
+                    await state.set_state(Form.confirm_receipt)
+                else:
+                    await state.update_data(is_ai_mode=False)
+                    await message.answer(
+                        get_msg(user_id, "ai_partial_fail"),
+                        reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+                    )
+                    await state.set_state(Form.shop)
+                return
+
+        # If we reach here, API failed or no QR link found.
+        # Fallback to asking for full receipt photo
+        await wait_msg.delete()
+        lang = users_db.get(user_id, {}).get("lang", "ru")
+        fallback_msg = "API Soliq не ответил или ссылка неверна. Пожалуйста, отправьте полное фото чека для распознавания (или нажмите Готово):" if lang == "ru" else "API Soliq javob bermadi yoki havola noto'g'ri. Iltimos, chekni rasmini yuboring (yoki Tayyor bosing):"
+        
+        done_btn = get_msg(user_id, "done_btn")
+        cancel_btn = get_msg(user_id, "cancel_btn")
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text=done_btn)], [KeyboardButton(text=cancel_btn)]],
+            resize_keyboard=True
+        )
+        await message.answer(fallback_msg, reply_markup=kb)
+        await state.update_data(receipt_photos=[])
+        await state.set_state(Form.waiting_receipt)
 
     except Exception as e:
         logging.error(f"QR OCR error: {e}")
         await wait_msg.delete()
+        
+        lang = users_db.get(user_id, {}).get("lang", "ru")
+        fallback_msg = "Ошибка при обработке QR. Пожалуйста, отправьте полное фото чека для распознавания:" if lang == "ru" else "QR kodni ishlashda xatolik. Iltimos, chekni to'liq rasmini yuboring:"
+        
+        done_btn = get_msg(user_id, "done_btn")
+        cancel_btn = get_msg(user_id, "cancel_btn")
         kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=get_msg(user_id, "cancel_btn"))]],
+            keyboard=[[KeyboardButton(text=done_btn)], [KeyboardButton(text=cancel_btn)]],
             resize_keyboard=True
         )
-        await message.answer(get_msg(user_id, "qr_not_found"), reply_markup=kb)
-
-@dp.message(Form.waiting_qr)
-async def qr_no_photo(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    await message.answer(get_msg(user_id, "only_photo"))
+        await message.answer(fallback_msg, reply_markup=kb)
+        await state.update_data(receipt_photos=[])
+        await state.set_state(Form.waiting_receipt)
 
 @dp.message(Form.lang)
 async def process_lang(message: types.Message, state: FSMContext):
