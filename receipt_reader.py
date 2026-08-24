@@ -234,54 +234,66 @@ def clean_receipt_with_ai(merged_receipt_data: dict) -> dict:
 
 def parse_receipt_soliq_api(soliq_link: str) -> dict | None:
     """Извлекает данные чека через официальный API Soliq."""
-    API_URL = "https://new-ofd.soliq.uz/api/payment"
+    import logging
+    logging.info(f"==> parse_receipt_soliq_api START. Link: {soliq_link}")
+    API_URL = "https://ofd.soliq.uz/api/payment"  # Обновлен URL на рабочий
     SECRET = "thisIsPaymentSecretKey123@#"
     
-    parsed = urlparse(soliq_link)
-    params = parse_qs(parsed.query)
-    
-    terminal_id = params.get("t", [None])[0]
-    payment_no = params.get("r", [None])[0]
-    payment_date = params.get("c", [None])[0]
-    fiscal_sign = params.get("s", [None])[0]
-    fiscal_sign_hash = params.get("h", [None])[0]
-    
-    if not terminal_id or not payment_no or not payment_date:
-        return None
-        
-    data = {
-        "terminalId": terminal_id,
-        "paymentNo": payment_no,
-        "paymentDate": payment_date,
-        "paymentType": "CHECK",
-    }
-    if fiscal_sign: data["fiscalSign"] = fiscal_sign
-    if fiscal_sign_hash: data["fiscalSignHash"] = fiscal_sign_hash
-    
-    timestamp = str(int(time.time()))
-    message = f"{terminal_id}:{payment_no}:{timestamp}"
-    signature = hmac.new(SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
-    
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "X-Timestamp": timestamp,
-        "X-Signature": signature,
-    }
-    
     try:
-        response = requests.post(API_URL, json=data, headers=headers, timeout=10)
-        print(f"[DEBUG] Soliq API response ({response.status_code}): {response.text[:500]}")
-        if response.status_code != 200:
+        parsed = urlparse(soliq_link)
+        params = parse_qs(parsed.query)
+        
+        terminal_id = params.get("t", [None])[0]
+        payment_no = params.get("r", [None])[0]
+        payment_date = params.get("c", [None])[0]
+        fiscal_sign = params.get("s", [None])[0]
+        fiscal_sign_hash = params.get("h", [None])[0]
+        
+        logging.info(f"[SOLIQ API] Parsed params: t={terminal_id}, r={payment_no}, c={payment_date}, s={fiscal_sign}, h={fiscal_sign_hash}")
+        
+        if not terminal_id or not payment_no or not payment_date:
+            logging.error("[SOLIQ API] Missing required params in URL!")
             return None
+            
+        data = {
+            "terminalId": terminal_id,
+            "paymentNo": payment_no,
+            "paymentDate": payment_date,
+            "paymentType": "CHECK",
+        }
+        if fiscal_sign: data["fiscalSign"] = fiscal_sign
+        if fiscal_sign_hash: data["fiscalSignHash"] = fiscal_sign_hash
+        
+        timestamp = str(int(time.time()))
+        message = f"{terminal_id}:{payment_no}:{timestamp}"
+        signature = hmac.new(SECRET.encode(), message.encode(), hashlib.sha256).hexdigest()
+        
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Timestamp": timestamp,
+            "X-Signature": signature,
+        }
+        
+        logging.info(f"[SOLIQ API] Sending POST request to {API_URL} with data: {data}")
+        response = requests.post(API_URL, json=data, headers=headers, timeout=10)
+        logging.info(f"[SOLIQ API] Response status: {response.status_code}")
+        
+        if response.status_code != 200:
+            logging.error(f"[SOLIQ API] Error response body: {response.text[:1000]}")
+            return None
+            
         result = response.json()
     except Exception as e:
-        print(f"[WARNING] Soliq API error: {e}")
+        logging.exception(f"[SOLIQ API] Exception during request/parsing: {e}")
         return None
         
     receipt = result.get("data", result)
     if not isinstance(receipt, dict):
+        logging.error(f"[SOLIQ API] Unexpected JSON structure: {result}")
         return None
+        
+    logging.info("[SOLIQ API] Successfully parsed API response JSON. Extracting fields...")
         
     company = receipt.get("extraInfo", {})
     if not isinstance(company, dict):
