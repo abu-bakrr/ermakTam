@@ -271,6 +271,7 @@ def parse_receipt_soliq_api(soliq_link: str) -> dict | None:
     
     try:
         response = requests.post(API_URL, json=data, headers=headers, timeout=10)
+        print(f"[DEBUG] Soliq API response ({response.status_code}): {response.text[:500]}")
         if response.status_code != 200:
             return None
         result = response.json()
