@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 import config
+import settings_manager
 import excel_writer
 import receipt_reader
 
@@ -81,6 +82,18 @@ class Form(StatesGroup):
 
     confirm = State()
 
+    # Admin Panel States
+    admin_menu = State()
+    admin_manage_admins = State()
+    admin_wait_add_admin = State()
+    admin_manage_orgs = State()
+    admin_manage_cards = State()
+    admin_wait_add_card = State()
+    
+    admin_manage_shops = State()
+    admin_wait_add_shop_name = State()
+    admin_wait_add_shop_org = State()
+
 def get_msg(user_id: int, key: str) -> str:
     lang = users_db.get(user_id, {}).get("lang", "ru")
     return config.MESSAGES.get(lang, config.MESSAGES["ru"]).get(key, key)
@@ -142,7 +155,7 @@ async def start_cmd(message: types.Message, state: FSMContext):
 async def cmd_file(message: types.Message):
     user_id = message.from_user.id
     lang = users_db.get(user_id, {}).get("lang", "ru")
-    if user_id not in config.ADMIN_IDS:
+    if user_id not in settings_manager.get_admins():
         msg = "У вас нет прав для скачивания файла." if lang == "ru" else "Faylni yuklab olish uchun ruxsatingiz yo'q."
         await message.answer(msg)
         return
@@ -174,7 +187,7 @@ async def callback_dl_file(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     lang = users_db.get(user_id, {}).get("lang", "ru")
     
-    if user_id not in config.ADMIN_IDS:
+    if user_id not in settings_manager.get_admins():
         await callback.answer("У вас нет прав.", show_alert=True)
         return
         
@@ -204,7 +217,7 @@ async def new_cmd(message: types.Message, state: FSMContext):
         ai_supplier="",
         photo_path=""
     )
-    shops = list(config.SHOP_TO_ORG.keys())
+    shops = list(settings_manager.get_shops().keys())
     await message.answer(get_msg(user_id, "choose_shop"), reply_markup=make_keyboard(user_id, shops))
     await state.set_state(Form.shop)
 
@@ -352,7 +365,7 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
         # Go straight to shop selection — no confirmation needed
         await message.answer(
             get_msg(user_id, "ai_yes_success"),
-            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+            reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
         )
         await state.set_state(Form.shop)
 
@@ -362,7 +375,7 @@ async def process_receipt_done(message: types.Message, state: FSMContext):
         await state.update_data(is_ai_mode=False, items_list=[], ai_items=[])
         await message.answer(
             get_msg(user_id, "ai_fail"),
-            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+            reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
         )
         await state.set_state(Form.shop)
 
@@ -374,7 +387,7 @@ async def process_confirm_receipt(message: types.Message, state: FSMContext):
     await state.update_data(is_ai_mode=True)
     await message.answer(
         get_msg(user_id, "ai_yes_success"),
-        reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+        reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
     )
     await state.set_state(Form.shop)
 
@@ -464,7 +477,7 @@ async def process_qr(message: types.Message, state: FSMContext):
                 # Go straight to shop selection — no confirmation needed
                 await message.answer(
                     get_msg(user_id, "ai_yes_success"),
-                    reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+                    reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
                 )
                 await state.set_state(Form.shop)
                 return
@@ -556,15 +569,15 @@ async def process_confirm_performer(message: types.Message, state: FSMContext):
 @dp.message(Form.shop)
 async def process_shop(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    if message.text not in config.SHOP_TO_ORG:
+    if message.text not in settings_manager.get_shops():
         await message.answer(get_msg(user_id, "invalid_shop"))
         return
         
     shop = message.text
-    org = config.SHOP_TO_ORG[shop]
+    org = settings_manager.get_shops()[shop]
     await state.update_data(shop=shop, org=org)
     
-    cards = config.ORG_CARDS.get(org, [])
+    cards = settings_manager.get_org_cards(org)
     
     cash_btn = get_msg(user_id, "cash_btn")
     buttons = cards + [cash_btn]
@@ -724,7 +737,7 @@ async def finish_and_confirm(message: types.Message, state: FSMContext):
 
     performer = users_db.get(user_id, {}).get("performer", "Неизвестно")
     shop = data.get("shop", "")
-    org = config.SHOP_TO_ORG.get(shop, "")
+    org = settings_manager.get_shops().get(shop, "")
     payment = data.get('payment_type', '')
     if data.get('card_number'):
         payment += f" ({data.get('card_number')})"
@@ -792,7 +805,7 @@ async def process_confirm(message: types.Message, state: FSMContext):
     
     performer = users_db.get(user_id, {}).get("performer", "Неизвестно")
     shop = data.get("shop", "")
-    org = config.SHOP_TO_ORG.get(shop, "")
+    org = settings_manager.get_shops().get(shop, "")
     
     record_data = {
         "shop": shop,
@@ -826,7 +839,7 @@ async def process_direct_grand_total(message: types.Message, state: FSMContext):
         await state.update_data(is_ai_mode=False, ai_items=[])
         await message.answer(
             get_msg(user_id, "ai_no_manual"),
-            reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+            reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
         )
         await state.set_state(Form.shop)
         return
@@ -839,9 +852,289 @@ async def process_direct_grand_total(message: types.Message, state: FSMContext):
     )
     await message.answer(
         get_msg(user_id, "ai_yes_success"),
-        reply_markup=make_keyboard(user_id, list(config.SHOP_TO_ORG.keys()))
+        reply_markup=make_keyboard(user_id, list(settings_manager.get_shops().keys()))
     )
     await state.set_state(Form.shop)
+
+# === ADMIN PANEL HANDLERS ===
+
+@dp.message(Command("admin"))
+async def admin_cmd(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in settings_manager.get_admins():
+        await message.answer("У вас нет доступа к этой команде.")
+        return
+    
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Управление Админами", callback_data="admin_manage_admins")],
+        [InlineKeyboardButton(text="Управление Картами", callback_data="admin_manage_orgs")],
+        [InlineKeyboardButton(text="Управление Цехами", callback_data="admin_manage_shops")]
+    ])
+    await message.answer("Панель администратора:", reply_markup=kb)
+    await state.set_state(Form.admin_menu)
+
+@dp.callback_query(F.data == "admin_manage_admins")
+async def cb_manage_admins(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in settings_manager.get_admins():
+        await callback.answer("Нет прав.", show_alert=True)
+        return
+    
+    admins = settings_manager.get_admins()
+    text = f"Текущие администраторы ({len(admins)}):\n" + "\n".join(map(str, admins))
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить админа", callback_data="admin_add_admin")],
+        [InlineKeyboardButton(text="Удалить админа", callback_data="admin_remove_admin")],
+        [InlineKeyboardButton(text="Назад", callback_data="admin_back_to_main")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(Form.admin_manage_admins)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_add_admin")
+async def cb_add_admin(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Отправьте Telegram ID нового администратора (только цифры):")
+    await state.set_state(Form.admin_wait_add_admin)
+    await callback.answer()
+
+@dp.message(Form.admin_wait_add_admin)
+async def process_add_admin(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    if user_id not in settings_manager.get_admins():
+        return
+    if not message.text.isdigit():
+        await message.answer("Пожалуйста, отправьте корректный числовой ID.")
+        return
+    new_admin_id = int(message.text)
+    settings_manager.add_admin(new_admin_id)
+    await message.answer(f"Администратор {new_admin_id} добавлен.")
+    
+    # Return to menu
+    await admin_cmd(message, state)
+
+@dp.callback_query(F.data == "admin_remove_admin")
+async def cb_remove_admin(callback: types.CallbackQuery, state: FSMContext):
+    admins = settings_manager.get_admins()
+    buttons = []
+    for adm in admins:
+        buttons.append([InlineKeyboardButton(text=f"Удалить {adm}", callback_data=f"admin_deladm_{adm}")])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="admin_manage_admins")])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("Выберите администратора для удаления:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_deladm_"))
+async def cb_do_remove_admin(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in settings_manager.get_admins():
+        return
+    
+    del_id = int(callback.data.split("_")[-1])
+    if del_id == user_id:
+        await callback.answer("Вы не можете удалить самого себя!", show_alert=True)
+        return
+        
+    settings_manager.remove_admin(del_id)
+    await callback.answer(f"Админ {del_id} удален.", show_alert=True)
+    await cb_manage_admins(callback, state)
+
+@dp.callback_query(F.data == "admin_back_to_main")
+async def cb_admin_back_main(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.delete()
+    await admin_cmd(callback.message, state)
+    await callback.answer()
+
+# === MANAGE ORG CARDS ===
+@dp.callback_query(F.data == "admin_manage_orgs")
+async def cb_manage_orgs(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if user_id not in settings_manager.get_admins():
+        return
+        
+    orgs = list(set(settings_manager.get_shops().values()))
+    buttons = []
+    for org in orgs:
+        buttons.append([InlineKeyboardButton(text=org, callback_data=f"admin_org_{org}")])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="admin_back_to_main")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("Выберите организацию:", reply_markup=kb)
+    await state.set_state(Form.admin_manage_orgs)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_org_"))
+async def cb_org_selected(callback: types.CallbackQuery, state: FSMContext):
+    org = callback.data.replace("admin_org_", "")
+    cards = settings_manager.get_org_cards(org)
+    
+    await state.update_data(admin_selected_org=org)
+    
+    text = f"Организация: {org}\nТекущие карты:\n"
+    if not cards:
+        text += "Нет привязанных карт."
+    else:
+        text += "\n".join(cards)
+        
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить карту", callback_data="admin_add_card")],
+        [InlineKeyboardButton(text="Удалить карту", callback_data="admin_remove_card")],
+        [InlineKeyboardButton(text="Назад", callback_data="admin_manage_orgs")]
+    ])
+    await callback.message.edit_text(text, reply_markup=kb)
+    await state.set_state(Form.admin_manage_cards)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_add_card")
+async def cb_add_card(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Отправьте номер новой карты в чат:")
+    await state.set_state(Form.admin_wait_add_card)
+    await callback.answer()
+
+@dp.message(Form.admin_wait_add_card)
+async def process_add_card(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    org = data.get("admin_selected_org")
+    if not org:
+        await admin_cmd(message, state)
+        return
+        
+    card = message.text.strip()
+    settings_manager.add_org_card(org, card)
+    await message.answer(f"Карта {card} добавлена для {org}.")
+    await admin_cmd(message, state)
+
+@dp.callback_query(F.data == "admin_remove_card")
+async def cb_remove_card(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    org = data.get("admin_selected_org")
+    if not org:
+        await callback.answer("Ошибка организации.", show_alert=True)
+        return
+        
+    cards = settings_manager.get_org_cards(org)
+    buttons = []
+    for i, card in enumerate(cards):
+        # Callback data max length is 64 chars, so we use index
+        buttons.append([InlineKeyboardButton(text=f"Удалить {card}", callback_data=f"admin_delcard_{i}")])
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data=f"admin_org_{org}")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("Выберите карту для удаления:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_delcard_"))
+async def cb_do_remove_card(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    org = data.get("admin_selected_org")
+    if not org:
+        return
+        
+    idx = int(callback.data.split("_")[-1])
+    cards = settings_manager.get_org_cards(org)
+    
+    if 0 <= idx < len(cards):
+        card = cards[idx]
+        settings_manager.remove_org_card(org, card)
+        await callback.answer(f"Карта удалена.", show_alert=True)
+    
+    # Refresh cards view
+    callback.data = f"admin_org_{org}"
+    await cb_org_selected(callback, state)
+
+# === END ADMIN PANEL ===
+
+# === MANAGE SHOPS ===
+@dp.callback_query(F.data == "admin_manage_shops")
+async def cb_manage_shops(callback: types.CallbackQuery, state: FSMContext):
+    user_id = callback.fromuser.id if hasattr(callback, "from_user") else callback.from_user.id
+    if user_id not in settings_manager.get_admins():
+        return
+        
+    shops = settings_manager.get_shops()
+    text = "Текущие цехи:\n\n"
+    for shop, org in shops.items():
+        text += f"🏭 <b>{shop}</b> -> 🏢 {org}\n"
+        
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Добавить цех", callback_data="admin_add_shop")],
+        [InlineKeyboardButton(text="Удалить цех", callback_data="admin_remove_shop")],
+        [InlineKeyboardButton(text="Назад", callback_data="admin_back_to_main")]
+    ])
+    
+    await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    await state.set_state(Form.admin_manage_shops)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_add_shop")
+async def cb_add_shop(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.edit_text("Отправьте название нового цеха (например: Писта 2):")
+    await state.set_state(Form.admin_wait_add_shop_name)
+    await callback.answer()
+
+@dp.message(Form.admin_wait_add_shop_name)
+async def process_add_shop_name(message: types.Message, state: FSMContext):
+    shop_name = message.text.strip()
+    await state.update_data(admin_new_shop_name=shop_name)
+    
+    orgs = list(set(settings_manager.get_shops().values()))
+    text = f"Цех: <b>{shop_name}</b>\n\nТеперь введите название организации для этого цеха, или выберите из существующих:"
+    
+    buttons = []
+    for org in orgs:
+        buttons.append([KeyboardButton(text=org)])
+    
+    if buttons:
+        kb = ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    else:
+        await message.answer(text, parse_mode="HTML")
+        
+    await state.set_state(Form.admin_wait_add_shop_org)
+
+@dp.message(Form.admin_wait_add_shop_org)
+async def process_add_shop_org(message: types.Message, state: FSMContext):
+    org_name = message.text.strip()
+    data = await state.get_data()
+    shop_name = data.get("admin_new_shop_name")
+    
+    if not shop_name:
+        await admin_cmd(message, state)
+        return
+        
+    settings_manager.add_shop(shop_name, org_name)
+    
+    await message.answer(f"Цех <b>{shop_name}</b> успешно привязан к организации <b>{org_name}</b>.", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await admin_cmd(message, state)
+
+@dp.callback_query(F.data == "admin_remove_shop")
+async def cb_remove_shop(callback: types.CallbackQuery, state: FSMContext):
+    shops = settings_manager.get_shops()
+    buttons = []
+    for i, shop in enumerate(shops.keys()):
+        # Callback data max length is 64 chars
+        buttons.append([InlineKeyboardButton(text=f"Удалить {shop}", callback_data=f"admin_delshop_{i}")])
+        
+    buttons.append([InlineKeyboardButton(text="Назад", callback_data="admin_manage_shops")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("Выберите цех для удаления:", reply_markup=kb)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_delshop_"))
+async def cb_do_remove_shop(callback: types.CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split("_")[-1])
+    shops = list(settings_manager.get_shops().keys())
+    
+    if 0 <= idx < len(shops):
+        shop = shops[idx]
+        settings_manager.remove_shop(shop)
+        await callback.answer(f"Цех удален.", show_alert=True)
+    
+    # Refresh shop view
+    await cb_manage_shops(callback, state)
 
 async def main():
     await bot.delete_webhook(drop_pending_updates=True)
